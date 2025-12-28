@@ -1,0 +1,8 @@
+login.microsoftonline.com
+cn.bing.com
+challenges.cloudflare.com
+rewards.bing.com
+outlook.com
+jsdelivr.net
+jsdelivr.com
+ghproxy.com
