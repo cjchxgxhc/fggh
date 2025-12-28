@@ -80,6 +80,7 @@ DOMAIN_PATTERN = re.compile(
     r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$",
     re.IGNORECASE
 )
+# 仅接受没有其它后缀的特定 $ 修饰符：$all 或 $important
 ADBLOCK_BLACK_PATTERN = re.compile(r"^\|{1,2}([a-z0-9-\.]+)\^(?:\$(all|important))?$", re.IGNORECASE)
 ADBLOCK_WHITE_PATTERN = re.compile(r"^@@\|{1,2}([a-z0-9-\.]+)\^(?:\$(all|important))?$", re.IGNORECASE)
 RULE_PATTERN = re.compile(r"^(?:DOMAIN-SUFFIX|HOST-SUFFIX|host-suffix|DOMAIN|HOST|host)[,\s]+(.+)$", re.IGNORECASE)
@@ -91,7 +92,7 @@ _thread_local = threading.local()
 
 def log(msg: str, critical: bool = False) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    lvl = "ERROR" if critical else "INFO"
+    lvl = "错误" if critical else "信息"
     print(f"[{ts}] [{lvl}] {msg}", flush=True)
 
 def sanitize(name: str) -> str:
@@ -113,7 +114,7 @@ def get_session() -> requests.Session:
 def download_url(url: str) -> Tuple[str, List[str]]:
     try:
         if url.startswith("file://"):
-            log(f"file:// URLs disabled: {url}", critical=True)
+            log(f"file:// 链接已禁用: {url}", critical=True)
             return url, []
         session = get_session()
         for attempt in range(1, RETRY_COUNT + 1):
@@ -122,22 +123,22 @@ def download_url(url: str) -> Tuple[str, List[str]]:
                 r.raise_for_status()
                 txt = r.text or ""
                 if not txt.strip():
-                    log(f"empty content: {url}", critical=True)
+                    log(f"内容为空: {url}", critical=True)
                     return url, []
                 return url, [ln.strip() for ln in txt.splitlines() if ln.strip()]
             except requests.RequestException as e:
                 is_final = attempt == RETRY_COUNT
-                log(f"download failed ({type(e).__name__}) {url} ({attempt}/{RETRY_COUNT})" + (" - giving up" if is_final else ""))
+                log(f"下载失败 ({type(e).__name__}) {url} ({attempt}/{RETRY_COUNT})" + (" - 放弃" if is_final else ""))
                 if not is_final:
                     time.sleep(RETRY_DELAY)
         return url, []
     except Exception as e:
-        log(f"download error {url}: {str(e)[:120]}", critical=True)
+        log(f"下载异常 {url}: {str(e)[:120]}", critical=True)
         return url, []
 
 def download_all_urls(url_list: List[str]) -> Dict[str, List[str]]:
     unique = list(dict.fromkeys(u.strip() for u in url_list if u.strip()))
-    log(f"downloading {len(unique)} sources...")
+    log(f"开始下载 {len(unique)} 个源...")
     results: Dict[str, List[str]] = {}
     with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
         futures = {ex.submit(download_url, u): u for u in unique}
@@ -146,12 +147,12 @@ def download_all_urls(url_list: List[str]) -> Dict[str, List[str]]:
             try:
                 _, content = f.result()
                 results[u] = content
-                log(f"downloaded: {u} (lines: {len(content)})")
+                log(f"已下载: {u} (行数: {len(content)})")
             except Exception as e:
-                log(f"download task error {u}: {str(e)[:120]}", critical=True)
+                log(f"下载任务异常 {u}: {str(e)[:120]}", critical=True)
                 results[u] = []
     ok = sum(1 for v in results.values() if v)
-    log(f"download summary: {ok}/{len(unique)} succeeded")
+    log(f"下载汇总: 成功 {ok}/{len(unique)}")
     return results
 
 def is_valid_domain(domain: str) -> bool:
@@ -212,7 +213,7 @@ def parallel_extract_domains(lines: List[str], extractor: Callable[[str], Option
             try:
                 results.append(f.result())
             except Exception as e:
-                log(f"chunk processing error: {str(e)[:120]}", critical=True)
+                log(f"分块处理异常: {str(e)[:120]}", critical=True)
     return set().union(*results) if results else set()
 
 def process_blacklist_rules(lines: List[str]) -> Set[str]:
@@ -229,20 +230,20 @@ def remove_subdomains(domains: Set[str]) -> Set[str]:
     for d in sorted_domains:
         if not any(p in keep for p in get_parent_domains(d)):
             keep.add(d)
-    log(f"dedupe: {len(domains)} -> {len(keep)}")
+    log(f"去重: {len(domains)} -> {len(keep)}")
     return keep
 
 def filter_exact_whitelist(black_domains: Set[str], white_domains: Set[str]) -> Set[str]:
     if not white_domains:
         return black_domains
     filtered = black_domains - white_domains
-    log(f"whitelist-exact filter: {len(black_domains)} -> {len(filtered)}")
+    log(f"白名单精确过滤: {len(black_domains)} -> {len(filtered)}")
     return filtered
 
 def blacklist_dedup_and_filter(black: Set[str], white: Set[str]) -> Set[str]:
     filtered = filter_exact_whitelist(black, white)
     deduped = remove_subdomains(filtered)
-    log(f"blacklist processed: {len(filtered)} -> {len(deduped)}")
+    log(f"黑名单处理完成: {len(filtered)} -> {len(deduped)}")
     return deduped
 
 def _beijing_now_str() -> str:
@@ -250,9 +251,9 @@ def _beijing_now_str() -> str:
     bj = utc_now + datetime.timedelta(hours=8)
     return bj.strftime("%Y-%m-%d %H:%M:%S") + " CST"
 
-def save_domains_to_files(domains: Set[str], output_path: Path, group_name: str, source_urls: List[str]) -> None:
+def save_domains_to_files(domains: Set[str], output_path: Path, group_name: str, source_urls: List[str], white_source_urls: List[str]) -> None:
     if not domains:
-        log(f"no domains to save for {group_name}")
+        log(f"{group_name} 无域名可保存")
         return
     sorted_domains = sorted(domains)
     group_dir = output_path / group_name
@@ -262,68 +263,78 @@ def save_domains_to_files(domains: Set[str], output_path: Path, group_name: str,
     adblock_path = group_dir / "adblock.txt"
     with open(adblock_path, "w", encoding="utf-8") as f:
         f.write("# Generated by domain-filter\n")
-        f.write(f"# Rule: {group_name}\n")
-        f.write(f"# Update Time (Beijing): {beijing_time}\n")
-        f.write(f"# Domains: {len(sorted_domains)}\n")
-        f.write("# Applicable: AdBlock / AdGuard / uBlock Origin\n")
-        f.write("# Sources:\n")
+        f.write(f"# 规则: {group_name}\n")
+        f.write(f"# 更新时间 (北京时间): {beijing_time}\n")
+        f.write(f"# 域名数量: {len(sorted_domains)}\n")
+        f.write("# 适用: AdBlock / AdGuard / uBlock Origin\n")
+        f.write("# 黑名单来源:\n")
         for src in source_urls:
             f.write(f"# - {src}\n")
-        f.write("# Format: ||domain^ or ||domain^$all or ||domain^$important\n\n")
+        if white_source_urls:
+            f.write("# 白名单来源:\n")
+            for src in white_source_urls:
+                f.write(f"# - {src}\n")
+        f.write("# 格式: ||domain^ 或 ||domain^$all 或 ||domain^$important\n\n")
         for d in sorted_domains:
             f.write(f"||{d}^\n")
-    log(f"wrote adblock: {adblock_path} ({len(sorted_domains)})")
+    log(f"已写入 AdBlock 文件: {adblock_path} ({len(sorted_domains)} 个域名)")
 
     clash_path = group_dir / "clash.yaml"
     with open(clash_path, "w", encoding="utf-8") as f:
         f.write("# Generated by domain-filter\n")
-        f.write(f"# Rule: {group_name}\n")
-        f.write(f"# Update Time (Beijing): {beijing_time}\n")
-        f.write(f"# Domains: {len(sorted_domains)}\n")
-        f.write("# Applicable: Clash (domain payload list)\n")
-        f.write("# Sources:\n")
+        f.write(f"# 规则: {group_name}\n")
+        f.write(f"# 更新时间 (北京时间): {beijing_time}\n")
+        f.write(f"# 域名数量: {len(sorted_domains)}\n")
+        f.write("# 适用: Clash (domain payload list)\n")
+        f.write("# 黑名单来源:\n")
         for src in source_urls:
             f.write(f"# - {src}\n")
-        f.write("# Note: payload is a YAML list of strings in the form \"+.domain\".\n\n")
+        if white_source_urls:
+            f.write("# 白名单来源:\n")
+            for src in white_source_urls:
+                f.write(f"# - {src}\n")
+        f.write("# payload 为 YAML 字符串列表，条目格式为 \"+.domain\"\n\n")
         f.write("payload:\n")
         for d in sorted_domains:
             f.write(f"  - \"+.{d}\"\n")
-    log(f"wrote clash yaml: {clash_path} ({len(sorted_domains)})")
+    log(f"已写入 Clash 文件: {clash_path} ({len(sorted_domains)} 个域名)")
 
-def process_rule_group(name: str, urls: List[str], white_domains: Set[str],
+def process_rule_group(name: str, urls: List[str], white_domains: Set[str], white_sources: List[str],
                        downloaded: Dict[str, List[str]], output_dir: Path) -> None:
     sanitized = sanitize(name)
     if not sanitized or not urls:
-        log(f"skip invalid group: {name}", critical=True)
+        log(f"跳过无效组: {name}", critical=True)
         return
-    log(f"processing group: {name}")
+    log(f"开始处理组: {name}")
     lines: Set[str] = set()
     for url in urls:
         lines.update(downloaded.get(url, []))
     if not lines:
-        log(f"group {name} empty, skip")
+        log(f"组 {name} 无内容，跳过")
         return
     black_domains = process_blacklist_rules(list(lines))
     final_domains = blacklist_dedup_and_filter(black_domains, white_domains)
-    save_domains_to_files(final_domains, output_dir, sanitized, urls)
+    save_domains_to_files(final_domains, output_dir, sanitized, urls, white_sources)
 
 def main():
     start_time = time.time()
     output_dir = Path("OUTPUT")
     output_dir.mkdir(parents=True, exist_ok=True)
-    log(f"output dir: {output_dir.absolute()}")
+    log(f"输出目录: {output_dir.absolute()}")
 
     all_white_urls = [u for urls in WHITELIST_CONFIG.values() for u in urls]
     downloaded_white = download_all_urls(all_white_urls) if all_white_urls else {}
-    whitelist: Dict[str, Set[str]] = {}
+    whitelist_domains: Dict[str, Set[str]] = {}
+    whitelist_sources: Dict[str, List[str]] = {}
     for name, urls in WHITELIST_CONFIG.items():
         sanitized = sanitize(name)
         if sanitized and urls:
             lines = [ln for url in urls for ln in downloaded_white.get(url, [])]
             domains = process_whitelist_rules(lines)
             if domains:
-                whitelist[sanitized] = domains
-                log(f"whitelist {name}: extracted {len(domains)}")
+                whitelist_domains[sanitized] = domains
+                whitelist_sources[sanitized] = urls
+                log(f"白名单 {name}: 提取 {len(domains)} 个域名")
 
     all_black_urls = [u for urls in BLACKLIST_CONFIG.values() for u in urls]
     downloaded_black = download_all_urls(all_black_urls) if all_black_urls else {}
@@ -331,22 +342,24 @@ def main():
     with ThreadPoolExecutor(max_workers=RULEGROUP_WORKERS) as ex:
         futures = []
         for name, urls in BLACKLIST_CONFIG.items():
-            white = whitelist.get(sanitize(name), set())
-            futures.append(ex.submit(process_rule_group, name, urls, white, downloaded_black, output_dir))
+            sname = sanitize(name)
+            white = whitelist_domains.get(sname, set())
+            white_srcs = whitelist_sources.get(sname, [])
+            futures.append(ex.submit(process_rule_group, name, urls, white, white_srcs, downloaded_black, output_dir))
         for f in as_completed(futures):
             try:
                 f.result()
             except Exception as e:
-                log(f"group error: {str(e)[:120]}", critical=True)
+                log(f"组处理异常: {str(e)[:120]}", critical=True)
 
-    log(f"done, elapsed {time.time() - start_time:.2f}s")
+    log(f"全部完成，耗时 {time.time() - start_time:.2f}s")
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        log("user interrupt", critical=True)
+        log("用户中断", critical=True)
         sys.exit(1)
     except Exception as e:
-        log(f"fatal: {str(e)[:200]}", critical=True)
+        log(f"程序终止: {str(e)[:200]}", critical=True)
         sys.exit(1)
